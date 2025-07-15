@@ -32,6 +32,7 @@ _PyCoroMetrics_Fini(void)
                     /* Free any owned references */
                     for (int i = 0; i < metrics->chunk_count; i++) {
                         Py_XDECREF(metrics->chunks[i].awaited_name);
+                        Py_XDECREF(metrics->chunks[i].filename);
                     }
                     PyMem_Free(metrics->chunks);
                 }
@@ -164,6 +165,7 @@ _PyCoroMetrics_EndChunk(PyObject *coro, _PyInterpreterFrame *frame)
     
     /* Try to get the awaited function name from the frame */
     PyObject *awaited_name = NULL;
+    PyObject *filename = NULL;
     int lineno = 0;
     
     if (frame != NULL) {
@@ -171,6 +173,12 @@ _PyCoroMetrics_EndChunk(PyObject *coro, _PyInterpreterFrame *frame)
         if (code != NULL) {
             /* Get the line number */
             lineno = PyCode_Addr2Line(code, _PyInterpreterFrame_LASTI(frame));
+            
+            /* Get the filename */
+            if (code->co_filename != NULL) {
+                filename = code->co_filename;
+                Py_INCREF(filename);
+            }
             
             /* Try to get the name of what we're awaiting from the stack */
             if (frame->stacktop > code->co_nlocalsplus) {
@@ -209,6 +217,7 @@ _PyCoroMetrics_EndChunk(PyObject *coro, _PyInterpreterFrame *frame)
         .start_time = metrics->current_chunk_start,
         .duration = duration,
         .awaited_name = awaited_name,
+        .filename = filename,
         .lineno = lineno
     };
     
@@ -224,6 +233,7 @@ _PyCoroMetrics_EndChunk(PyObject *coro, _PyInterpreterFrame *frame)
         /* We're at capacity - need to remove shortest chunk */
         /* First, free the reference of the chunk being removed */
         Py_XDECREF(metrics->chunks[CORO_MAX_CHUNKS - 1].awaited_name);
+        Py_XDECREF(metrics->chunks[CORO_MAX_CHUNKS - 1].filename);
         
         /* Shift chunks to make room */
         for (int i = CORO_MAX_CHUNKS - 1; i > insert_pos; i--) {
@@ -257,6 +267,7 @@ _PyCoroMetrics_Free(PyObject *coro)
                 /* Free any owned references */
                 for (int i = 0; i < metrics->chunk_count; i++) {
                     Py_XDECREF(metrics->chunks[i].awaited_name);
+                    Py_XDECREF(metrics->chunks[i].filename);
                 }
                 PyMem_Free(metrics->chunks);
             }
@@ -332,6 +343,13 @@ _PyCoroMetrics_GetMetrics(PyObject *coro)
             PyDict_SetItemString(chunk_dict, "awaited", metrics->chunks[i].awaited_name);
         } else {
             PyDict_SetItemString(chunk_dict, "awaited", Py_None);
+        }
+        
+        /* Add filename if available */
+        if (metrics->chunks[i].filename != NULL) {
+            PyDict_SetItemString(chunk_dict, "filename", metrics->chunks[i].filename);
+        } else {
+            PyDict_SetItemString(chunk_dict, "filename", Py_None);
         }
         
         /* Add line number */
