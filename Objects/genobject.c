@@ -239,7 +239,7 @@ gen_send_ex2(PyGenObject *gen, PyObject *arg, PyObject **presult,
     
     /* End coroutine metrics tracking */
     if (PyCoro_CheckExact(gen)) {
-        _PyCoroMetrics_EndChunk((PyObject *)gen);
+        _PyCoroMetrics_EndChunk((PyObject *)gen, frame);
     }
     
     assert(tstate->exc_info == prev_exc_info);

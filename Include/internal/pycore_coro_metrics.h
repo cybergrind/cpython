@@ -10,12 +10,18 @@ extern "C" {
 
 #include "pycore_time.h"   // PyTime_t
 
+/* Forward declaration */
+typedef struct _PyInterpreterFrame _PyInterpreterFrame;
+
 /* Maximum number of execution chunks to track per coroutine */
-#define CORO_MAX_CHUNKS 1000
+#define CORO_MAX_CHUNKS 20  /* Keep only top 20 longest chunks */
 
 typedef struct {
     PyTime_t start_time;    /* Start time of the chunk */
     PyTime_t duration;      /* Duration of the chunk in nanoseconds */
+    PyObject *awaited_name; /* Name of the awaited function (owned ref) */
+    PyObject *filename;     /* File path where await happened (owned ref) */
+    int lineno;             /* Line number where await happened */
 } CoroChunkMetric;
 
 typedef struct {
@@ -40,7 +46,7 @@ extern CoroMetrics* _PyCoroMetrics_Get(PyObject *coro);
 extern void _PyCoroMetrics_StartChunk(PyObject *coro);
 
 /* End current chunk tracking */
-extern void _PyCoroMetrics_EndChunk(PyObject *coro);
+extern void _PyCoroMetrics_EndChunk(PyObject *coro, _PyInterpreterFrame *frame);
 
 /* Free metrics associated with a coroutine */
 extern void _PyCoroMetrics_Free(PyObject *coro);

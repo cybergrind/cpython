@@ -2,6 +2,8 @@
 #include "pycore_coro_metrics.h"
 #include "pycore_genobject.h"
 #include "pycore_time.h"
+#include "pycore_frame.h"
+#include "pycore_code.h"
 #include <string.h>
 
 /* Global dictionary to store coroutine -> metrics mapping */
@@ -25,10 +27,14 @@ _PyCoroMetrics_Fini(void)
         
         while (PyDict_Next(coro_metrics_dict, &pos, &key, &value)) {
             CoroMetrics *metrics = (CoroMetrics *)PyLong_AsVoidPtr(value);
-            if (metrics && metrics->chunks) {
-                PyMem_Free(metrics->chunks);
-            }
             if (metrics) {
+                if (metrics->chunks) {
+                    /* Free any owned references */
+                    for (int i = 0; i < metrics->chunk_count; i++) {
+                        Py_XDECREF(metrics->chunks[i].awaited_name);
+                    }
+                    PyMem_Free(metrics->chunks);
+                }
                 PyMem_Free(metrics);
             }
         }
@@ -69,7 +75,7 @@ _PyCoroMetrics_Get(PyObject *coro)
             return NULL;
         }
         
-        metrics->chunk_capacity = 16; /* Initial capacity */
+        metrics->chunk_capacity = CORO_MAX_CHUNKS; /* Use max capacity */
         metrics->chunks = PyMem_Calloc(metrics->chunk_capacity, sizeof(CoroChunkMetric));
         if (metrics->chunks == NULL) {
             PyMem_Free(metrics);
@@ -118,7 +124,7 @@ _PyCoroMetrics_StartChunk(PyObject *coro)
 }
 
 void
-_PyCoroMetrics_EndChunk(PyObject *coro)
+_PyCoroMetrics_EndChunk(PyObject *coro, _PyInterpreterFrame *frame)
 {
     CoroMetrics *metrics = _PyCoroMetrics_Get(coro);
     if (metrics == NULL || !metrics->is_tracking) {
@@ -133,35 +139,99 @@ _PyCoroMetrics_EndChunk(PyObject *coro)
     }
     PyTime_t duration = end_time - metrics->current_chunk_start;
     
-    /* Check if we need to expand the chunks array */
-    if (metrics->chunk_count >= metrics->chunk_capacity) {
-        if (metrics->chunk_count >= CORO_MAX_CHUNKS) {
-            /* Don't track more than max chunks */
+    /* Only keep the longest chunks - find insertion point */
+    int insert_pos = -1;
+    
+    if (metrics->chunk_count < CORO_MAX_CHUNKS) {
+        /* Still have room, add at the end */
+        insert_pos = metrics->chunk_count;
+    } else {
+        /* Find if this chunk is longer than any existing chunk */
+        for (int i = metrics->chunk_count - 1; i >= 0; i--) {
+            if (duration > metrics->chunks[i].duration) {
+                insert_pos = i;
+            } else {
+                break;
+            }
+        }
+        
+        if (insert_pos == -1) {
+            /* This chunk is shorter than all existing chunks */
             metrics->is_tracking = 0;
             return;
         }
-        
-        int new_capacity = metrics->chunk_capacity * 2;
-        if (new_capacity > CORO_MAX_CHUNKS) {
-            new_capacity = CORO_MAX_CHUNKS;
-        }
-        
-        CoroChunkMetric *new_chunks = PyMem_Realloc(metrics->chunks, 
-                                                    new_capacity * sizeof(CoroChunkMetric));
-        if (new_chunks == NULL) {
-            /* Can't expand, stop tracking */
-            metrics->is_tracking = 0;
-            return;
-        }
-        
-        metrics->chunks = new_chunks;
-        metrics->chunk_capacity = new_capacity;
     }
     
-    /* Record the chunk */
-    metrics->chunks[metrics->chunk_count].start_time = metrics->current_chunk_start;
-    metrics->chunks[metrics->chunk_count].duration = duration;
-    metrics->chunk_count++;
+    /* Try to get the awaited function name from the frame */
+    PyObject *awaited_name = NULL;
+    int lineno = 0;
+    
+    if (frame != NULL) {
+        PyCodeObject *code = _PyFrame_GetCode(frame);
+        if (code != NULL) {
+            /* Get the line number */
+            lineno = PyCode_Addr2Line(code, _PyInterpreterFrame_LASTI(frame));
+            
+            /* Try to get the name of what we're awaiting from the stack */
+            if (frame->stacktop > code->co_nlocalsplus) {
+                PyObject *top = frame->localsplus[frame->stacktop - 1];
+                if (top != NULL) {
+                    /* Check if it's a coroutine */
+                    if (PyCoro_CheckExact(top)) {
+                        PyObject *coro_name = ((PyCoroObject *)top)->cr_name;
+                        if (coro_name != NULL) {
+                            awaited_name = coro_name;
+                            Py_INCREF(awaited_name);
+                        }
+                    }
+                    /* Check if it's an async generator */
+                    else if (PyAsyncGen_CheckExact(top)) {
+                        PyObject *gen_name = ((PyAsyncGenObject *)top)->ag_name;
+                        if (gen_name != NULL) {
+                            awaited_name = gen_name;
+                            Py_INCREF(awaited_name);
+                        }
+                    }
+                    /* Check if it's a Task or Future */
+                    else if (PyObject_HasAttrString(top, "__name__")) {
+                        awaited_name = PyObject_GetAttrString(top, "__name__");
+                        if (awaited_name == NULL) {
+                            PyErr_Clear();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    /* Create new chunk data */
+    CoroChunkMetric new_chunk = {
+        .start_time = metrics->current_chunk_start,
+        .duration = duration,
+        .awaited_name = awaited_name,
+        .lineno = lineno
+    };
+    
+    /* Insert the chunk in sorted order (by duration, descending) */
+    if (metrics->chunk_count < CORO_MAX_CHUNKS) {
+        /* Make room at insert_pos */
+        for (int i = metrics->chunk_count; i > insert_pos; i--) {
+            metrics->chunks[i] = metrics->chunks[i-1];
+        }
+        metrics->chunks[insert_pos] = new_chunk;
+        metrics->chunk_count++;
+    } else {
+        /* We're at capacity - need to remove shortest chunk */
+        /* First, free the reference of the chunk being removed */
+        Py_XDECREF(metrics->chunks[CORO_MAX_CHUNKS - 1].awaited_name);
+        
+        /* Shift chunks to make room */
+        for (int i = CORO_MAX_CHUNKS - 1; i > insert_pos; i--) {
+            metrics->chunks[i] = metrics->chunks[i-1];
+        }
+        metrics->chunks[insert_pos] = new_chunk;
+    }
+    
     metrics->total_time += duration;
     metrics->is_tracking = 0;
 }
@@ -184,6 +254,10 @@ _PyCoroMetrics_Free(PyObject *coro)
         CoroMetrics *metrics = (CoroMetrics *)PyLong_AsVoidPtr(value);
         if (metrics) {
             if (metrics->chunks) {
+                /* Free any owned references */
+                for (int i = 0; i < metrics->chunk_count; i++) {
+                    Py_XDECREF(metrics->chunks[i].awaited_name);
+                }
                 PyMem_Free(metrics->chunks);
             }
             PyMem_Free(metrics);
@@ -252,6 +326,24 @@ _PyCoroMetrics_GetMetrics(PyObject *coro)
         
         PyDict_SetItemString(chunk_dict, "duration", duration);
         Py_DECREF(duration);
+        
+        /* Add awaited function name if available */
+        if (metrics->chunks[i].awaited_name != NULL) {
+            PyDict_SetItemString(chunk_dict, "awaited", metrics->chunks[i].awaited_name);
+        } else {
+            PyDict_SetItemString(chunk_dict, "awaited", Py_None);
+        }
+        
+        /* Add line number */
+        PyObject *lineno = PyLong_FromLong(metrics->chunks[i].lineno);
+        if (lineno == NULL) {
+            Py_DECREF(chunk_dict);
+            Py_DECREF(chunks);
+            Py_DECREF(result);
+            return NULL;
+        }
+        PyDict_SetItemString(chunk_dict, "lineno", lineno);
+        Py_DECREF(lineno);
         
         PyList_SET_ITEM(chunks, i, chunk_dict);
     }
