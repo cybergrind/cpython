@@ -14,6 +14,7 @@
 #include "pycore_pyatomic_ft_wrappers.h" // FT_ATOMIC_*
 #include "pycore_pyerrors.h"      // _PyErr_ClearExcState()
 #include "pycore_pystate.h"       // _PyThreadState_GET()
+#include "pycore_coro_metrics.h"  // _PyCoroMetrics_*
 
 #include "pystats.h"
 
@@ -150,6 +151,8 @@ gen_dealloc(PyGenObject *gen)
     assert(gen->gi_exc_state.exc_value == NULL);
     if (_PyGen_GetCode(gen)->co_flags & CO_COROUTINE) {
         Py_CLEAR(((PyCoroObject *)gen)->cr_origin_or_finalizer);
+        /* Free coroutine metrics */
+        _PyCoroMetrics_Free((PyObject *)gen);
     }
     Py_DECREF(_PyGen_GetCode(gen));
     Py_CLEAR(gen->gi_name);
@@ -226,7 +229,19 @@ gen_send_ex2(PyGenObject *gen, PyObject *arg, PyObject **presult,
 
     gen->gi_frame_state = FRAME_EXECUTING;
     EVAL_CALL_STAT_INC(EVAL_CALL_GENERATOR);
+    
+    /* Start coroutine metrics tracking if this is a coroutine */
+    if (PyCoro_CheckExact(gen)) {
+        _PyCoroMetrics_StartChunk((PyObject *)gen);
+    }
+    
     PyObject *result = _PyEval_EvalFrame(tstate, frame, exc);
+    
+    /* End coroutine metrics tracking */
+    if (PyCoro_CheckExact(gen)) {
+        _PyCoroMetrics_EndChunk((PyObject *)gen);
+    }
+    
     assert(tstate->exc_info == prev_exc_info);
     assert(gen->gi_exc_state.previous_item == NULL);
     assert(gen->gi_frame_state != FRAME_EXECUTING);
@@ -1147,10 +1162,24 @@ and may be removed in a future version of Python.");
 PyDoc_STRVAR(coro_close_doc,
 "close() -> raise GeneratorExit inside coroutine.");
 
+static PyObject *
+coro_get_metrics(PyGenObject *gen, PyObject *Py_UNUSED(ignored))
+{
+    return _PyCoroMetrics_GetMetrics((PyObject *)gen);
+}
+
+PyDoc_STRVAR(coro_get_metrics_doc,
+"get_metrics() -> get execution time metrics for this coroutine.\n\n"
+"Returns a dictionary with:\n"
+"  - total_time: Total execution time in seconds\n"
+"  - chunk_count: Number of execution chunks\n"
+"  - chunks: List of dicts with 'duration' for each chunk");
+
 static PyMethodDef coro_methods[] = {
     {"send",(PyCFunction)gen_send, METH_O, coro_send_doc},
     {"throw",_PyCFunction_CAST(gen_throw), METH_FASTCALL, coro_throw_doc},
     {"close",(PyCFunction)gen_close, METH_NOARGS, coro_close_doc},
+    {"get_metrics", (PyCFunction)coro_get_metrics, METH_NOARGS, coro_get_metrics_doc},
     {"__sizeof__", (PyCFunction)gen_sizeof, METH_NOARGS, sizeof__doc__},
     {"__class_getitem__", Py_GenericAlias, METH_O|METH_CLASS, PyDoc_STR("See PEP 585")},
     {NULL, NULL}        /* Sentinel */
