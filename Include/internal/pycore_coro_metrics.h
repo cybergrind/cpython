@@ -28,6 +28,7 @@ typedef struct {
     PyObject *coro_name;    /* Name of the coroutine (owned ref) */
     PyObject *coro_filename;/* File where coroutine was defined (owned ref) */
     int coro_firstlineno;   /* First line of coroutine definition */
+    PyObject *debug_info;   /* Debug text information (owned ref) */
 } CoroChunkMetric;
 
 typedef struct {
@@ -62,6 +63,12 @@ extern PyObject* _PyCoroMetrics_GetMetrics(PyObject *coro);
 
 /* Get all coroutine metrics globally */
 extern PyObject* _PyCoroMetrics_GetAllMetrics(void);
+
+/* Set debug info for current task */
+extern void _PyCoroMetrics_SetDebugInfo(PyObject *info);
+
+/* Get debug info for current task */
+extern PyObject* _PyCoroMetrics_GetDebugInfo(void);
 
 #ifdef __cplusplus
 }

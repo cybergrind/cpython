@@ -15,6 +15,9 @@ static CoroChunkMetric *global_chunks = NULL;
 static int global_chunk_count = 0;
 static int global_chunk_capacity = 0;
 
+/* Thread-local storage for debug info */
+static _Thread_local PyObject *current_debug_info = NULL;
+
 void
 _PyCoroMetrics_Init(void)
 {
@@ -46,6 +49,7 @@ _PyCoroMetrics_Fini(void)
                         Py_XDECREF(metrics->chunks[i].filename);
                         Py_XDECREF(metrics->chunks[i].coro_name);
                         Py_XDECREF(metrics->chunks[i].coro_filename);
+                        Py_XDECREF(metrics->chunks[i].debug_info);
                     }
                     PyMem_Free(metrics->chunks);
                 }
@@ -63,6 +67,7 @@ _PyCoroMetrics_Fini(void)
             Py_XDECREF(global_chunks[i].filename);
             Py_XDECREF(global_chunks[i].coro_name);
             Py_XDECREF(global_chunks[i].coro_filename);
+            Py_XDECREF(global_chunks[i].debug_info);
         }
         PyMem_Free(global_chunks);
         global_chunks = NULL;
@@ -196,6 +201,7 @@ add_chunk_to_global(const CoroChunkMetric *chunk, PyObject *coro)
     /* Also increment refs for copied fields */
     Py_XINCREF(new_chunk.awaited_name);
     Py_XINCREF(new_chunk.filename);
+    Py_XINCREF(new_chunk.debug_info);
     
     /* Insert the chunk */
     if (global_chunk_count < GLOBAL_MAX_CHUNKS) {
@@ -212,6 +218,7 @@ add_chunk_to_global(const CoroChunkMetric *chunk, PyObject *coro)
         Py_XDECREF(global_chunks[GLOBAL_MAX_CHUNKS - 1].filename);
         Py_XDECREF(global_chunks[GLOBAL_MAX_CHUNKS - 1].coro_name);
         Py_XDECREF(global_chunks[GLOBAL_MAX_CHUNKS - 1].coro_filename);
+        Py_XDECREF(global_chunks[GLOBAL_MAX_CHUNKS - 1].debug_info);
         
         /* Shift chunks to make room */
         for (int i = GLOBAL_MAX_CHUNKS - 1; i > insert_pos; i--) {
@@ -333,8 +340,10 @@ _PyCoroMetrics_EndChunk(PyObject *coro, _PyInterpreterFrame *frame)
         .lineno = lineno,
         .coro_name = NULL,      /* Will be set when adding to global */
         .coro_filename = NULL,  /* Will be set when adding to global */
-        .coro_firstlineno = 0   /* Will be set when adding to global */
+        .coro_firstlineno = 0,  /* Will be set when adding to global */
+        .debug_info = current_debug_info  /* Capture current debug info */
     };
+    Py_XINCREF(new_chunk.debug_info);
     
     /* Insert the chunk in sorted order (by duration, descending) */
     if (metrics->chunk_count < CORO_MAX_CHUNKS) {
@@ -349,6 +358,7 @@ _PyCoroMetrics_EndChunk(PyObject *coro, _PyInterpreterFrame *frame)
         /* First, free the reference of the chunk being removed */
         Py_XDECREF(metrics->chunks[CORO_MAX_CHUNKS - 1].awaited_name);
         Py_XDECREF(metrics->chunks[CORO_MAX_CHUNKS - 1].filename);
+        Py_XDECREF(metrics->chunks[CORO_MAX_CHUNKS - 1].debug_info);
         
         /* Shift chunks to make room */
         for (int i = CORO_MAX_CHUNKS - 1; i > insert_pos; i--) {
@@ -388,6 +398,7 @@ _PyCoroMetrics_Free(PyObject *coro)
                     Py_XDECREF(metrics->chunks[i].filename);
                     Py_XDECREF(metrics->chunks[i].coro_name);
                     Py_XDECREF(metrics->chunks[i].coro_filename);
+                    Py_XDECREF(metrics->chunks[i].debug_info);
                 }
                 PyMem_Free(metrics->chunks);
             }
@@ -483,6 +494,13 @@ _PyCoroMetrics_GetMetrics(PyObject *coro)
         PyDict_SetItemString(chunk_dict, "lineno", lineno);
         Py_DECREF(lineno);
         
+        /* Add debug info if available */
+        if (metrics->chunks[i].debug_info != NULL) {
+            PyDict_SetItemString(chunk_dict, "debug_info", metrics->chunks[i].debug_info);
+        } else {
+            PyDict_SetItemString(chunk_dict, "debug_info", Py_None);
+        }
+        
         PyList_SET_ITEM(chunks, i, chunk_dict);
     }
     
@@ -571,8 +589,35 @@ _PyCoroMetrics_GetAllMetrics(void)
         PyDict_SetItemString(chunk_dict, "coro_firstlineno", coro_firstlineno);
         Py_DECREF(coro_firstlineno);
         
+        /* Add debug info if available */
+        if (global_chunks[i].debug_info != NULL) {
+            PyDict_SetItemString(chunk_dict, "debug_info", global_chunks[i].debug_info);
+        } else {
+            PyDict_SetItemString(chunk_dict, "debug_info", Py_None);
+        }
+        
         PyList_SET_ITEM(chunks, i, chunk_dict);
     }
     
     return chunks;
+}
+
+void
+_PyCoroMetrics_SetDebugInfo(PyObject *info)
+{
+    PyObject *old_info = current_debug_info;
+    current_debug_info = info;
+    Py_XINCREF(current_debug_info);
+    Py_XDECREF(old_info);
+}
+
+PyObject*
+_PyCoroMetrics_GetDebugInfo(void)
+{
+    PyObject *info = current_debug_info;
+    if (info == NULL) {
+        Py_RETURN_NONE;
+    }
+    Py_INCREF(info);
+    return info;
 }

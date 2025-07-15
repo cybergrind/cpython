@@ -1591,6 +1591,37 @@ sys_get_coroutine_metrics(PyObject *module, PyObject *Py_UNUSED(ignored))
     return sys_get_coroutine_metrics_impl(module);
 }
 
+PyDoc_STRVAR(sys_set_coroutine_debug_info__doc__,
+"set_coroutine_debug_info($module, info, /)\n"
+"--\n"
+"\n"
+"Set debug info for the current task/coroutine.\n"
+"\n"
+"This debug info will be captured in all subsequent coroutine chunks.");
+
+#define SYS_SET_COROUTINE_DEBUG_INFO_METHODDEF    \
+    {"set_coroutine_debug_info", (PyCFunction)sys_set_coroutine_debug_info, METH_O, sys_set_coroutine_debug_info__doc__},
+
+PyDoc_STRVAR(sys_get_coroutine_debug_info__doc__,
+"get_coroutine_debug_info($module, /)\n"
+"--\n"
+"\n"
+"Get the current debug info for the current task/coroutine.\n"
+"\n"
+"Returns the debug info that was previously set, or None if not set.");
+
+#define SYS_GET_COROUTINE_DEBUG_INFO_METHODDEF    \
+    {"get_coroutine_debug_info", (PyCFunction)sys_get_coroutine_debug_info, METH_NOARGS, sys_get_coroutine_debug_info__doc__},
+
+static PyObject *
+sys_get_coroutine_debug_info_impl(PyObject *module);
+
+static PyObject *
+sys_get_coroutine_debug_info(PyObject *module, PyObject *Py_UNUSED(ignored))
+{
+    return sys_get_coroutine_debug_info_impl(module);
+}
+
 #ifndef SYS_GETWINDOWSVERSION_METHODDEF
     #define SYS_GETWINDOWSVERSION_METHODDEF
 #endif /* !defined(SYS_GETWINDOWSVERSION_METHODDEF) */
@@ -1634,4 +1665,4 @@ sys_get_coroutine_metrics(PyObject *module, PyObject *Py_UNUSED(ignored))
 #ifndef SYS_GETANDROIDAPILEVEL_METHODDEF
     #define SYS_GETANDROIDAPILEVEL_METHODDEF
 #endif /* !defined(SYS_GETANDROIDAPILEVEL_METHODDEF) */
-/*[clinic end generated code: output=0035deaa16b656b7 input=a9049054013a1b77]*/
+/*[clinic end generated code: output=dd70275f7c144de2 input=a9049054013a1b77]*/

@@ -2565,6 +2565,40 @@ sys_get_coroutine_metrics_impl(PyObject *module)
     return _PyCoroMetrics_GetAllMetrics();
 }
 
+/*[clinic input]
+sys.set_coroutine_debug_info
+
+    info: object
+    /
+
+Set debug info for the current task/coroutine.
+
+This debug info will be captured in all subsequent coroutine chunks.
+[clinic start generated code]*/
+
+static PyObject *
+sys_set_coroutine_debug_info(PyObject *module, PyObject *info)
+/*[clinic end generated code: output=eab6acc168795441 input=ed7e8317c40a3787]*/
+{
+    _PyCoroMetrics_SetDebugInfo(info);
+    Py_RETURN_NONE;
+}
+
+/*[clinic input]
+sys.get_coroutine_debug_info
+
+Get the current debug info for the current task/coroutine.
+
+Returns the debug info that was previously set, or None if not set.
+[clinic start generated code]*/
+
+static PyObject *
+sys_get_coroutine_debug_info_impl(PyObject *module)
+/*[clinic end generated code: output=0efd690609f9ac51 input=f0a4505564df8968]*/
+{
+    return _PyCoroMetrics_GetDebugInfo();
+}
+
 static PyMethodDef sys_methods[] = {
     /* Might as well keep this in alphabetic order */
     SYS_ADDAUDITHOOK_METHODDEF
@@ -2591,6 +2625,8 @@ static PyMethodDef sys_methods[] = {
 #endif
     SYS_GETTOTALREFCOUNT_METHODDEF
     SYS_GET_COROUTINE_METRICS_METHODDEF
+    SYS_SET_COROUTINE_DEBUG_INFO_METHODDEF
+    SYS_GET_COROUTINE_DEBUG_INFO_METHODDEF
     SYS_GETREFCOUNT_METHODDEF
     SYS_GETRECURSIONLIMIT_METHODDEF
     {"getsizeof", _PyCFunction_CAST(sys_getsizeof),
