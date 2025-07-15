@@ -28,6 +28,7 @@ Data members:
 #include "pycore_pyerrors.h"      // _PyErr_GetRaisedException()
 #include "pycore_pylifecycle.h"   // _PyErr_WriteUnraisableDefaultHook()
 #include "pycore_pymath.h"        // _PY_SHORT_FLOAT_REPR
+#include "pycore_coro_metrics.h"  // _PyCoroMetrics_GetAllMetrics()
 #include "pycore_pymem.h"         // _PyMem_SetDefaultAllocator()
 #include "pycore_pystate.h"       // _PyThreadState_GET()
 #include "pycore_pystats.h"       // _Py_PrintSpecializationStats()
@@ -2549,6 +2550,20 @@ close_and_release:
     return 0;
 }
 
+/*[clinic input]
+sys.get_coroutine_metrics
+
+Get metrics for all tracked coroutines.
+
+Returns a dictionary mapping coroutine IDs to their execution metrics.
+[clinic start generated code]*/
+
+static PyObject *
+sys_get_coroutine_metrics_impl(PyObject *module)
+/*[clinic end generated code: output=e14d3b3bc60c575f input=a78f484987424da6]*/
+{
+    return _PyCoroMetrics_GetAllMetrics();
+}
 
 static PyMethodDef sys_methods[] = {
     /* Might as well keep this in alphabetic order */
@@ -2575,6 +2590,7 @@ static PyMethodDef sys_methods[] = {
     {"getobjects", _Py_GetObjects, METH_VARARGS},
 #endif
     SYS_GETTOTALREFCOUNT_METHODDEF
+    SYS_GET_COROUTINE_METRICS_METHODDEF
     SYS_GETREFCOUNT_METHODDEF
     SYS_GETRECURSIONLIMIT_METHODDEF
     {"getsizeof", _PyCFunction_CAST(sys_getsizeof),

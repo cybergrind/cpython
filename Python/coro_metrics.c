@@ -4,6 +4,7 @@
 #include "pycore_time.h"
 #include "pycore_frame.h"
 #include "pycore_code.h"
+#include "cpython/genobject.h"
 #include <string.h>
 
 /* Global dictionary to store coroutine -> metrics mapping */
@@ -370,4 +371,77 @@ _PyCoroMetrics_GetMetrics(PyObject *coro)
     Py_DECREF(chunks);
     
     return result;
+}
+
+PyObject*
+_PyCoroMetrics_GetAllMetrics(void)
+{
+    if (coro_metrics_dict == NULL) {
+        Py_RETURN_NONE;
+    }
+    
+    PyObject *all_metrics = PyDict_New();
+    if (all_metrics == NULL) {
+        return NULL;
+    }
+    
+    PyObject *key, *value;
+    Py_ssize_t pos = 0;
+    
+    while (PyDict_Next(coro_metrics_dict, &pos, &key, &value)) {
+        /* Get the coroutine object from the key */
+        PyObject *coro = PyLong_AsVoidPtr(key);
+        if (coro == NULL) {
+            continue;
+        }
+        
+        /* Get metrics for this coroutine */
+        PyObject *metrics = _PyCoroMetrics_GetMetrics(coro);
+        if (metrics == NULL) {
+            PyErr_Clear();
+            continue;
+        }
+        
+        /* Add coroutine info to metrics */
+        PyCoroObject *coro_obj = (PyCoroObject *)coro;
+        if (coro_obj->cr_name != NULL) {
+            PyDict_SetItemString(metrics, "name", coro_obj->cr_name);
+        }
+        
+        /* Get code object through the frame */
+        PyGenObject *gen = (PyGenObject *)coro;
+        _PyInterpreterFrame *frame = (_PyInterpreterFrame *)(gen->gi_iframe);
+        if (frame != NULL) {
+            PyCodeObject *code = _PyFrame_GetCode(frame);
+            if (code != NULL) {
+                if (code->co_filename != NULL) {
+                    PyDict_SetItemString(metrics, "coro_filename", code->co_filename);
+                }
+                PyObject *firstlineno = PyLong_FromLong(code->co_firstlineno);
+                if (firstlineno != NULL) {
+                    PyDict_SetItemString(metrics, "coro_firstlineno", firstlineno);
+                    Py_DECREF(firstlineno);
+                }
+            }
+        }
+        
+        /* Create a unique key for this coroutine */
+        PyObject *coro_key = PyUnicode_FromFormat("%p", coro);
+        if (coro_key == NULL) {
+            Py_DECREF(metrics);
+            continue;
+        }
+        
+        /* Add to results */
+        if (PyDict_SetItem(all_metrics, coro_key, metrics) < 0) {
+            Py_DECREF(coro_key);
+            Py_DECREF(metrics);
+            continue;
+        }
+        
+        Py_DECREF(coro_key);
+        Py_DECREF(metrics);
+    }
+    
+    return all_metrics;
 }

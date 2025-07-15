@@ -54,6 +54,9 @@ extern void _PyCoroMetrics_Free(PyObject *coro);
 /* Get metrics as a Python object */
 extern PyObject* _PyCoroMetrics_GetMetrics(PyObject *coro);
 
+/* Get all coroutine metrics globally */
+extern PyObject* _PyCoroMetrics_GetAllMetrics(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1487,4 +1487,24 @@ skip_optional_pos:
 exit:
     return return_value;
 }
-/*[clinic end generated code: output=b26155080c82c472 input=a9049054013a1b77]*/
+
+PyDoc_STRVAR(_asyncio_get_metrics__doc__,
+"get_metrics($module, /)\n"
+"--\n"
+"\n"
+"Get metrics for all tracked coroutines.\n"
+"\n"
+"Returns a dictionary mapping coroutine IDs to their execution metrics.");
+
+#define _ASYNCIO_GET_METRICS_METHODDEF    \
+    {"get_metrics", (PyCFunction)_asyncio_get_metrics, METH_NOARGS, _asyncio_get_metrics__doc__},
+
+static PyObject *
+_asyncio_get_metrics_impl(PyObject *module);
+
+static PyObject *
+_asyncio_get_metrics(PyObject *module, PyObject *Py_UNUSED(ignored))
+{
+    return _asyncio_get_metrics_impl(module);
+}
+/*[clinic end generated code: output=8e56df55bc086088 input=a9049054013a1b77]*/

@@ -1571,6 +1571,26 @@ exit:
     return return_value;
 }
 
+PyDoc_STRVAR(sys_get_coroutine_metrics__doc__,
+"get_coroutine_metrics($module, /)\n"
+"--\n"
+"\n"
+"Get metrics for all tracked coroutines.\n"
+"\n"
+"Returns a dictionary mapping coroutine IDs to their execution metrics.");
+
+#define SYS_GET_COROUTINE_METRICS_METHODDEF    \
+    {"get_coroutine_metrics", (PyCFunction)sys_get_coroutine_metrics, METH_NOARGS, sys_get_coroutine_metrics__doc__},
+
+static PyObject *
+sys_get_coroutine_metrics_impl(PyObject *module);
+
+static PyObject *
+sys_get_coroutine_metrics(PyObject *module, PyObject *Py_UNUSED(ignored))
+{
+    return sys_get_coroutine_metrics_impl(module);
+}
+
 #ifndef SYS_GETWINDOWSVERSION_METHODDEF
     #define SYS_GETWINDOWSVERSION_METHODDEF
 #endif /* !defined(SYS_GETWINDOWSVERSION_METHODDEF) */
@@ -1614,4 +1634,4 @@ exit:
 #ifndef SYS_GETANDROIDAPILEVEL_METHODDEF
     #define SYS_GETANDROIDAPILEVEL_METHODDEF
 #endif /* !defined(SYS_GETANDROIDAPILEVEL_METHODDEF) */
-/*[clinic end generated code: output=9cc9069aef1482bc input=a9049054013a1b77]*/
+/*[clinic end generated code: output=0035deaa16b656b7 input=a9049054013a1b77]*/
