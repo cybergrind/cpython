@@ -16,12 +16,18 @@ typedef struct _PyInterpreterFrame _PyInterpreterFrame;
 /* Maximum number of execution chunks to track per coroutine */
 #define CORO_MAX_CHUNKS 20  /* Keep only top 20 longest chunks */
 
+/* Maximum number of global chunks to track */
+#define GLOBAL_MAX_CHUNKS 100  /* Keep only top 100 longest chunks globally */
+
 typedef struct {
     PyTime_t start_time;    /* Start time of the chunk */
     PyTime_t duration;      /* Duration of the chunk in nanoseconds */
     PyObject *awaited_name; /* Name of the awaited function (owned ref) */
     PyObject *filename;     /* File path where await happened (owned ref) */
     int lineno;             /* Line number where await happened */
+    PyObject *coro_name;    /* Name of the coroutine (owned ref) */
+    PyObject *coro_filename;/* File where coroutine was defined (owned ref) */
+    int coro_firstlineno;   /* First line of coroutine definition */
 } CoroChunkMetric;
 
 typedef struct {

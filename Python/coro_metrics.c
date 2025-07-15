@@ -10,11 +10,21 @@
 /* Global dictionary to store coroutine -> metrics mapping */
 static PyObject *coro_metrics_dict = NULL;
 
+/* Global array to store slowest chunks */
+static CoroChunkMetric *global_chunks = NULL;
+static int global_chunk_count = 0;
+static int global_chunk_capacity = 0;
+
 void
 _PyCoroMetrics_Init(void)
 {
     if (coro_metrics_dict == NULL) {
         coro_metrics_dict = PyDict_New();
+    }
+    if (global_chunks == NULL) {
+        global_chunk_capacity = GLOBAL_MAX_CHUNKS;
+        global_chunks = PyMem_Calloc(global_chunk_capacity, sizeof(CoroChunkMetric));
+        global_chunk_count = 0;
     }
 }
 
@@ -34,6 +44,8 @@ _PyCoroMetrics_Fini(void)
                     for (int i = 0; i < metrics->chunk_count; i++) {
                         Py_XDECREF(metrics->chunks[i].awaited_name);
                         Py_XDECREF(metrics->chunks[i].filename);
+                        Py_XDECREF(metrics->chunks[i].coro_name);
+                        Py_XDECREF(metrics->chunks[i].coro_filename);
                     }
                     PyMem_Free(metrics->chunks);
                 }
@@ -42,6 +54,20 @@ _PyCoroMetrics_Fini(void)
         }
         
         Py_CLEAR(coro_metrics_dict);
+    }
+    
+    /* Clean up global chunks */
+    if (global_chunks != NULL) {
+        for (int i = 0; i < global_chunk_count; i++) {
+            Py_XDECREF(global_chunks[i].awaited_name);
+            Py_XDECREF(global_chunks[i].filename);
+            Py_XDECREF(global_chunks[i].coro_name);
+            Py_XDECREF(global_chunks[i].coro_filename);
+        }
+        PyMem_Free(global_chunks);
+        global_chunks = NULL;
+        global_chunk_count = 0;
+        global_chunk_capacity = 0;
     }
 }
 
@@ -108,6 +134,91 @@ _PyCoroMetrics_Get(PyObject *coro)
     
     Py_DECREF(key);
     return metrics;
+}
+
+/* Add a chunk to global storage, maintaining sorted order by duration */
+static void
+add_chunk_to_global(const CoroChunkMetric *chunk, PyObject *coro)
+{
+    if (global_chunks == NULL) {
+        _PyCoroMetrics_Init();
+        if (global_chunks == NULL) {
+            return;
+        }
+    }
+    
+    /* Find insertion position */
+    int insert_pos = -1;
+    
+    if (global_chunk_count < GLOBAL_MAX_CHUNKS) {
+        /* Still have room */
+        insert_pos = global_chunk_count;
+    } else {
+        /* Find if this chunk is slower than any existing chunk */
+        for (int i = global_chunk_count - 1; i >= 0; i--) {
+            if (chunk->duration > global_chunks[i].duration) {
+                insert_pos = i;
+            } else {
+                break;
+            }
+        }
+        
+        if (insert_pos == -1) {
+            /* This chunk is faster than all existing chunks */
+            return;
+        }
+    }
+    
+    /* Get coroutine info */
+    PyCoroObject *coro_obj = (PyCoroObject *)coro;
+    PyObject *coro_name = coro_obj->cr_name;
+    PyObject *coro_filename = NULL;
+    int coro_firstlineno = 0;
+    
+    PyGenObject *gen = (PyGenObject *)coro;
+    _PyInterpreterFrame *frame = (_PyInterpreterFrame *)(gen->gi_iframe);
+    if (frame != NULL) {
+        PyCodeObject *code = _PyFrame_GetCode(frame);
+        if (code != NULL) {
+            coro_filename = code->co_filename;
+            coro_firstlineno = code->co_firstlineno;
+        }
+    }
+    
+    /* Create new chunk with coroutine info */
+    CoroChunkMetric new_chunk = *chunk;
+    new_chunk.coro_name = coro_name;
+    Py_XINCREF(new_chunk.coro_name);
+    new_chunk.coro_filename = coro_filename;
+    Py_XINCREF(new_chunk.coro_filename);
+    new_chunk.coro_firstlineno = coro_firstlineno;
+    
+    /* Also increment refs for copied fields */
+    Py_XINCREF(new_chunk.awaited_name);
+    Py_XINCREF(new_chunk.filename);
+    
+    /* Insert the chunk */
+    if (global_chunk_count < GLOBAL_MAX_CHUNKS) {
+        /* Make room at insert_pos */
+        for (int i = global_chunk_count; i > insert_pos; i--) {
+            global_chunks[i] = global_chunks[i-1];
+        }
+        global_chunks[insert_pos] = new_chunk;
+        global_chunk_count++;
+    } else {
+        /* We're at capacity - need to remove fastest chunk */
+        /* First, free the reference of the chunk being removed */
+        Py_XDECREF(global_chunks[GLOBAL_MAX_CHUNKS - 1].awaited_name);
+        Py_XDECREF(global_chunks[GLOBAL_MAX_CHUNKS - 1].filename);
+        Py_XDECREF(global_chunks[GLOBAL_MAX_CHUNKS - 1].coro_name);
+        Py_XDECREF(global_chunks[GLOBAL_MAX_CHUNKS - 1].coro_filename);
+        
+        /* Shift chunks to make room */
+        for (int i = GLOBAL_MAX_CHUNKS - 1; i > insert_pos; i--) {
+            global_chunks[i] = global_chunks[i-1];
+        }
+        global_chunks[insert_pos] = new_chunk;
+    }
 }
 
 void
@@ -219,7 +330,10 @@ _PyCoroMetrics_EndChunk(PyObject *coro, _PyInterpreterFrame *frame)
         .duration = duration,
         .awaited_name = awaited_name,
         .filename = filename,
-        .lineno = lineno
+        .lineno = lineno,
+        .coro_name = NULL,      /* Will be set when adding to global */
+        .coro_filename = NULL,  /* Will be set when adding to global */
+        .coro_firstlineno = 0   /* Will be set when adding to global */
     };
     
     /* Insert the chunk in sorted order (by duration, descending) */
@@ -245,6 +359,9 @@ _PyCoroMetrics_EndChunk(PyObject *coro, _PyInterpreterFrame *frame)
     
     metrics->total_time += duration;
     metrics->is_tracking = 0;
+    
+    /* Add to global chunks */
+    add_chunk_to_global(&new_chunk, coro);
 }
 
 void
@@ -269,6 +386,8 @@ _PyCoroMetrics_Free(PyObject *coro)
                 for (int i = 0; i < metrics->chunk_count; i++) {
                     Py_XDECREF(metrics->chunks[i].awaited_name);
                     Py_XDECREF(metrics->chunks[i].filename);
+                    Py_XDECREF(metrics->chunks[i].coro_name);
+                    Py_XDECREF(metrics->chunks[i].coro_filename);
                 }
                 PyMem_Free(metrics->chunks);
             }
@@ -376,72 +495,84 @@ _PyCoroMetrics_GetMetrics(PyObject *coro)
 PyObject*
 _PyCoroMetrics_GetAllMetrics(void)
 {
-    if (coro_metrics_dict == NULL) {
+    if (global_chunks == NULL || global_chunk_count == 0) {
         Py_RETURN_NONE;
     }
     
-    PyObject *all_metrics = PyDict_New();
-    if (all_metrics == NULL) {
+    /* Create list of chunks */
+    PyObject *chunks = PyList_New(global_chunk_count);
+    if (chunks == NULL) {
         return NULL;
     }
     
-    PyObject *key, *value;
-    Py_ssize_t pos = 0;
-    
-    while (PyDict_Next(coro_metrics_dict, &pos, &key, &value)) {
-        /* Get the coroutine object from the key */
-        PyObject *coro = PyLong_AsVoidPtr(key);
-        if (coro == NULL) {
-            continue;
+    for (int i = 0; i < global_chunk_count; i++) {
+        PyObject *chunk_dict = PyDict_New();
+        if (chunk_dict == NULL) {
+            Py_DECREF(chunks);
+            return NULL;
         }
         
-        /* Get metrics for this coroutine */
-        PyObject *metrics = _PyCoroMetrics_GetMetrics(coro);
-        if (metrics == NULL) {
-            PyErr_Clear();
-            continue;
+        /* Add duration */
+        double duration_seconds = PyTime_AsSecondsDouble(global_chunks[i].duration);
+        PyObject *duration = PyFloat_FromDouble(duration_seconds);
+        if (duration == NULL) {
+            Py_DECREF(chunk_dict);
+            Py_DECREF(chunks);
+            return NULL;
+        }
+        PyDict_SetItemString(chunk_dict, "duration", duration);
+        Py_DECREF(duration);
+        
+        /* Add awaited function name */
+        if (global_chunks[i].awaited_name != NULL) {
+            PyDict_SetItemString(chunk_dict, "awaited", global_chunks[i].awaited_name);
+        } else {
+            PyDict_SetItemString(chunk_dict, "awaited", Py_None);
         }
         
-        /* Add coroutine info to metrics */
-        PyCoroObject *coro_obj = (PyCoroObject *)coro;
-        if (coro_obj->cr_name != NULL) {
-            PyDict_SetItemString(metrics, "name", coro_obj->cr_name);
+        /* Add filename where await happened */
+        if (global_chunks[i].filename != NULL) {
+            PyDict_SetItemString(chunk_dict, "filename", global_chunks[i].filename);
+        } else {
+            PyDict_SetItemString(chunk_dict, "filename", Py_None);
         }
         
-        /* Get code object through the frame */
-        PyGenObject *gen = (PyGenObject *)coro;
-        _PyInterpreterFrame *frame = (_PyInterpreterFrame *)(gen->gi_iframe);
-        if (frame != NULL) {
-            PyCodeObject *code = _PyFrame_GetCode(frame);
-            if (code != NULL) {
-                if (code->co_filename != NULL) {
-                    PyDict_SetItemString(metrics, "coro_filename", code->co_filename);
-                }
-                PyObject *firstlineno = PyLong_FromLong(code->co_firstlineno);
-                if (firstlineno != NULL) {
-                    PyDict_SetItemString(metrics, "coro_firstlineno", firstlineno);
-                    Py_DECREF(firstlineno);
-                }
-            }
+        /* Add line number */
+        PyObject *lineno = PyLong_FromLong(global_chunks[i].lineno);
+        if (lineno == NULL) {
+            Py_DECREF(chunk_dict);
+            Py_DECREF(chunks);
+            return NULL;
+        }
+        PyDict_SetItemString(chunk_dict, "lineno", lineno);
+        Py_DECREF(lineno);
+        
+        /* Add coroutine name */
+        if (global_chunks[i].coro_name != NULL) {
+            PyDict_SetItemString(chunk_dict, "coro_name", global_chunks[i].coro_name);
+        } else {
+            PyDict_SetItemString(chunk_dict, "coro_name", Py_None);
         }
         
-        /* Create a unique key for this coroutine */
-        PyObject *coro_key = PyUnicode_FromFormat("%p", coro);
-        if (coro_key == NULL) {
-            Py_DECREF(metrics);
-            continue;
+        /* Add coroutine filename */
+        if (global_chunks[i].coro_filename != NULL) {
+            PyDict_SetItemString(chunk_dict, "coro_filename", global_chunks[i].coro_filename);
+        } else {
+            PyDict_SetItemString(chunk_dict, "coro_filename", Py_None);
         }
         
-        /* Add to results */
-        if (PyDict_SetItem(all_metrics, coro_key, metrics) < 0) {
-            Py_DECREF(coro_key);
-            Py_DECREF(metrics);
-            continue;
+        /* Add coroutine first line number */
+        PyObject *coro_firstlineno = PyLong_FromLong(global_chunks[i].coro_firstlineno);
+        if (coro_firstlineno == NULL) {
+            Py_DECREF(chunk_dict);
+            Py_DECREF(chunks);
+            return NULL;
         }
+        PyDict_SetItemString(chunk_dict, "coro_firstlineno", coro_firstlineno);
+        Py_DECREF(coro_firstlineno);
         
-        Py_DECREF(coro_key);
-        Py_DECREF(metrics);
+        PyList_SET_ITEM(chunks, i, chunk_dict);
     }
     
-    return all_metrics;
+    return chunks;
 }
